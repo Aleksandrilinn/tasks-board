@@ -1,0 +1,1472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tasks Board</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f8f8f6;
+    --card-bg: #ffffff;
+    --fg: #181816;
+    --fg-muted: #6f6e69;
+    --fg-faint: #adaca6;
+    --border: #e2e0d8;
+    --border-subtle: #eceae3;
+    --accent: #181816;
+    --accent-waiting: #eab308;
+    --accent-done: #16a34a;
+    --accent-red: #d33828;
+    --font: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: "JetBrains Mono", monospace;
+    --shadow-card: 0 4px 20px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.03);
+    --shadow-drag: 0 18px 40px rgba(0,0,0,0.14), 0 4px 12px rgba(0,0,0,0.06);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--fg);
+    font-family: var(--font); -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+
+  /* Infinite canvas */
+  #canvas-container {
+    position: fixed; inset: 0; cursor: default; touch-action: none;
+    background-color: var(--bg);
+    background-image: radial-gradient(var(--border) 1.2px, transparent 1.2px);
+    background-size: 26px 26px;
+  }
+  #canvas-container.panning { cursor: grabbing !important; }
+
+  #world {
+    position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0;
+  }
+
+  /* CATEGORY BOARD — Auto-expanding width */
+  .category-board {
+    position: absolute; transform: translate(-50%, 0);
+    min-width: 440px; max-width: 760px; width: max-content;
+    background: var(--card-bg);
+    border: 1.5px solid var(--border); border-radius: 14px;
+    box-shadow: var(--shadow-card);
+    display: flex; flex-direction: column;
+    cursor: default; z-index: 10;
+  }
+  .category-board.dragging {
+    cursor: grabbing !important; box-shadow: var(--shadow-drag); z-index: 100 !important;
+    opacity: 0.96;
+  }
+
+  /* Category Header (Drag handle for the whole board) */
+  .category-header {
+    padding: 14px 20px 12px;
+    border-bottom: 1.5px solid var(--border-subtle);
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: grab;
+  }
+  .category-header:active { cursor: grabbing; }
+  
+  .header-left {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .category-title {
+    font-size: 14px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--fg); text-transform: uppercase;
+    outline: none; border-radius: 4px; padding: 2px 4px; margin-left: -4px;
+    cursor: text; user-select: text;
+  }
+  .category-title:focus { background: #f0eee6; }
+  .category-count {
+    font-size: 11px; font-weight: 600; color: var(--fg-muted);
+    font-family: var(--font-mono); background: #f0eee6;
+    padding: 2px 7px; border-radius: 999px;
+  }
+  .category-del-btn {
+    border: none; background: transparent; color: var(--fg-faint);
+    cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px;
+    opacity: 0; transition: opacity 0.15s, color 0.15s;
+  }
+  .category-board:hover .category-del-btn { opacity: 1; }
+  .category-del-btn:hover { color: var(--accent-red); background: #f0eee6; }
+
+  /* Task List inside Category */
+  .task-list {
+    display: flex; flex-direction: column;
+    padding: 12px 18px; gap: 10px; max-height: 72vh; overflow-y: auto;
+  }
+
+  /* INDIVIDUAL TASK ITEM */
+  .task-block {
+    background: #fafaf8; border: 1.2px solid var(--border);
+    border-radius: 10px; padding: 10px 14px 10px;
+    display: flex; flex-direction: column; gap: 4px;
+    transition: border-color 0.15s, background 0.15s;
+    position: relative; width: 100%;
+  }
+  .task-block:hover {
+    border-color: #b8b6ad; background: #ffffff;
+  }
+  .task-block.drag-over {
+    box-shadow: 0 2px 0 0 var(--accent);
+  }
+  .task-block.dragging {
+    opacity: 0.35;
+  }
+  .task-block.state-done {
+    opacity: 0.55; background: #f4f6f4; border-color: #c9d5cb;
+  }
+  .task-block.state-done .task-name {
+    text-decoration: line-through; color: var(--fg-muted);
+  }
+
+  .task-main-row {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+  }
+
+  /* Grip handle for reordering tasks */
+  .task-drag-grip {
+    flex: none; color: var(--fg-faint); cursor: grab; font-size: 12px;
+    padding: 1px 2px; line-height: 1; opacity: 0; transition: opacity 0.15s;
+  }
+  .task-block:hover > .task-main-row > .task-drag-grip { opacity: 1; }
+  .task-drag-grip:active { cursor: grabbing; }
+
+  /* 3-State Traffic Circle: White (To Do) -> Yellow (On Hold) -> Green (Done) */
+  .state-circle {
+    flex: none; width: 15px; height: 15px; border-radius: 50%;
+    border: 1.8px solid var(--accent);
+    cursor: pointer; background: #ffffff; transition: all 0.15s;
+  }
+  .state-circle:hover { transform: scale(1.18); }
+  .state-circle.waiting {
+    background: #facc15 !important; border-color: #ca8a04 !important;
+  }
+  .state-circle.done {
+    background: var(--accent-done) !important; border-color: var(--accent-done) !important;
+  }
+
+  /* Editable Titles */
+  .task-name {
+    flex: 1; font-size: 13.5px; font-weight: 600; line-height: 1.4;
+    outline: none; word-break: break-word; user-select: text; cursor: text;
+    border-radius: 3px; padding: 2px 4px; color: var(--fg);
+  }
+  .task-name:focus {
+    background: #ffffff; box-shadow: 0 0 0 1.5px var(--accent);
+  }
+
+  .task-tools {
+    display: flex; align-items: center; gap: 4px; opacity: 0; transition: opacity 0.15s; flex: none;
+  }
+  .task-block:hover .task-tools { opacity: 1; }
+  .tool-btn {
+    border: none; background: transparent; color: var(--fg-faint);
+    cursor: pointer; padding: 2px 6px; border-radius: 4px; font-size: 11px;
+    font-weight: 600; font-family: var(--font-mono);
+  }
+  .tool-btn:hover { background: #f0eee6; color: var(--fg); }
+  .tool-btn.has-note { color: var(--fg); font-weight: 700; }
+  .tool-btn.del:hover { color: var(--accent-red); }
+
+  /* SUBTASK CONTAINER (Clean 1cm indented paragraph structure) */
+  .subtask-container {
+    display: flex; flex-direction: column; gap: 4px;
+    margin-left: 20px; padding-left: 10px;
+    border-left: 2px solid var(--border-subtle);
+    margin-top: 4px;
+  }
+
+  .subtask-item {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 2px 0; border-radius: 6px;
+    transition: background 0.12s;
+  }
+  .subtask-item.drag-over {
+    box-shadow: 0 2px 0 0 var(--accent);
+  }
+  .subtask-item.dragging {
+    opacity: 0.35;
+  }
+
+  .subtask-row {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+  }
+
+  /* Grip handle for dragging subtasks */
+  .drag-grip {
+    flex: none; color: var(--fg-faint); cursor: grab; font-size: 12px;
+    padding: 1px 2px; line-height: 1; opacity: 0; transition: opacity 0.15s;
+  }
+  .subtask-item:hover > .subtask-row > .drag-grip { opacity: 1; }
+  .drag-grip:active { cursor: grabbing; }
+
+  .subtask-circle {
+    flex: none; width: 12px; height: 12px; border-radius: 50%;
+    border: 1.5px solid var(--accent); cursor: pointer; background: #ffffff;
+    transition: all 0.15s;
+  }
+  .subtask-circle:hover { transform: scale(1.18); }
+  .subtask-circle.waiting {
+    background: #facc15 !important; border-color: #ca8a04 !important;
+  }
+  .subtask-circle.done {
+    background: var(--accent-done) !important; border-color: var(--accent-done) !important;
+  }
+  .subtask-text {
+    flex: 1; outline: none; line-height: 1.4; font-size: 13px; font-weight: 500;
+    user-select: text; cursor: text; border-radius: 3px; padding: 2px 4px;
+    color: var(--fg);
+  }
+  .subtask-text:focus {
+    background: #ffffff; box-shadow: 0 0 0 1.5px var(--accent);
+  }
+  .subtask-item.done > .subtask-row > .subtask-text {
+    text-decoration: line-through; color: var(--fg-faint);
+  }
+
+  .subtask-tools {
+    display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity 0.15s; flex: none;
+  }
+  .subtask-item:hover > .subtask-row > .subtask-tools { opacity: 1; }
+
+  .subtask-del {
+    color: var(--fg-faint); cursor: pointer; font-size: 12px; padding: 2px 4px; border-radius: 4px;
+  }
+  .subtask-del:hover { color: var(--accent-red); background: #f0eee6; }
+
+  /* DEDICATED NOTE / LINK LINE */
+  .note-row {
+    display: flex; align-items: baseline; gap: 6px;
+    margin-left: 25px; margin-top: 2px; margin-bottom: 2px;
+    width: calc(100% - 25px);
+  }
+  .subtask-item > .note-row {
+    margin-left: 22px; width: calc(100% - 22px);
+  }
+  .note-prefix {
+    font-size: 12px; color: var(--fg-faint); flex: none; font-weight: 500;
+  }
+  .note-input {
+    flex: 1; border: none; border-bottom: 1px solid var(--border);
+    background: transparent; outline: none; font-size: 12px;
+    font-family: var(--font); color: var(--fg-muted); padding: 2px 0;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .note-input:focus {
+    border-bottom-color: var(--accent); color: var(--fg);
+  }
+  .note-input::placeholder {
+    color: var(--fg-faint); font-size: 11.5px;
+  }
+
+  /* Category Footer — Inline Quick Input to add Task directly inside area */
+  .category-footer {
+    padding: 10px 18px 14px;
+    border-top: 1.5px solid var(--border-subtle);
+  }
+  .inline-add-input {
+    width: 100%; border: 1.5px dashed var(--border); outline: none;
+    background: transparent; border-radius: 8px; padding: 9px 12px;
+    font-size: 13px; font-family: var(--font); color: var(--fg);
+    transition: all 0.15s;
+  }
+  .inline-add-input:focus {
+    border-style: solid; border-color: var(--accent); background: #ffffff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  }
+  .inline-add-input::placeholder { color: var(--fg-faint); }
+
+
+  /* NOTES VIEW — Distinct Whiteboard Space for Drafts/Writing */
+  #world-notes {
+    position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0;
+    display: none;
+  }
+  body.view-notes #world { display: none !important; }
+  body.view-notes #world-notes { display: block !important; }
+
+  .note-card {
+    position: absolute; transform: translate(-50%, 0);
+    width: 520px; background: var(--card-bg);
+    border: 1.5px solid var(--border); border-radius: 14px;
+    box-shadow: var(--shadow-card);
+    display: flex; flex-direction: column;
+    cursor: default; z-index: 10;
+  }
+  .note-card.dragging {
+    cursor: grabbing !important; box-shadow: var(--shadow-drag); z-index: 100 !important;
+    opacity: 0.96;
+  }
+  .note-card-header {
+    padding: 14px 20px 12px;
+    border-bottom: 1.5px solid var(--border-subtle);
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: grab;
+  }
+  .note-card-header:active { cursor: grabbing; }
+  .note-card-title {
+    font-size: 14px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--fg); outline: none; border-radius: 4px; padding: 2px 4px; margin-left: -4px;
+    cursor: text; user-select: text; flex: 1;
+  }
+  .note-card-title:focus { background: #f0eee6; }
+  .note-card-del-btn {
+    border: none; background: transparent; color: var(--fg-faint);
+    cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px;
+    opacity: 0; transition: opacity 0.15s, color 0.15s; flex: none;
+  }
+  .note-card:hover .note-card-del-btn { opacity: 1; }
+  .note-card-del-btn:hover { color: var(--accent-red); background: #f0eee6; }
+
+  .note-card-body {
+    padding: 16px 20px 20px;
+    display: flex; flex-direction: column;
+  }
+  .note-textarea {
+    width: 100%; min-height: 220px; border: none; outline: none;
+    background: transparent; color: var(--fg);
+    font-family: var(--font); font-size: 13.5px; line-height: 1.6;
+    resize: vertical; user-select: text; cursor: text;
+  }
+  .note-textarea::placeholder {
+    color: var(--fg-faint); font-size: 13px;
+  }
+
+  /* COMPACT SINGLE-LINE BOTTOM BAR */
+  .glass-panel {
+    position: fixed; background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1.5px solid rgba(0,0,0,0.08); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.05); z-index: 1000;
+  }
+  #bottom-nav {
+    bottom: 18px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 4px; padding: 4px 8px;
+    white-space: nowrap; max-width: 90vw; overflow-x: auto;
+  }
+  .nav-btn {
+    border: none; background: transparent; padding: 5px 10px; border-radius: 6px;
+    font-size: 12px; font-weight: 600; font-family: var(--font); color: var(--fg);
+    cursor: pointer; display: flex; align-items: center; gap: 4px; transition: all 0.15s;
+    flex: none;
+  }
+  .nav-btn:hover { background: #f0eee6; }
+  .nav-btn.active { background: var(--accent); color: #ffffff; }
+
+  /* Compact Zoom controls */
+  #zoom-controls {
+    right: 18px; bottom: 18px; display: flex; align-items: center; gap: 2px; padding: 3px;
+  }
+  .zoom-indicator {
+    font-size: 11px; font-family: var(--font-mono); font-weight: 600; color: var(--fg-muted);
+    min-width: 40px; text-align: center; cursor: pointer; padding: 4px; border-radius: 4px;
+  }
+  .zoom-indicator:hover { background: #f0eee6; color: var(--fg); }
+
+  /* Archive Drawer */
+  #archive-drawer {
+    position: fixed; right: 22px; top: 22px; width: 340px; max-height: calc(100vh - 120px);
+    display: none; flex-direction: column; z-index: 1000; overflow: hidden;
+  }
+  #archive-drawer.open { display: flex; }
+  .drawer-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; border-bottom: 1.5px solid var(--border);
+    font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  .archive-list {
+    overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .archive-item {
+    padding: 10px 12px; border-radius: 8px; background: #fafaf8; border: 1.2px solid var(--border);
+    font-size: 12.5px; display: flex; align-items: center; justify-content: space-between;
+  }
+  .archive-item .title { font-weight: 600; text-decoration: line-through; color: var(--fg-muted); }
+
+  /* Modal: Add Area */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.3); backdrop-filter: blur(4px);
+    display: none; align-items: center; justify-content: center; z-index: 2000;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: #fff; padding: 22px; border-radius: 14px; width: 340px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.18); border: 1.5px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<!-- Canvas Area -->
+<div id="canvas-container">
+  <div id="world"></div>
+    <div id="world-notes"></div>
+</div>
+
+<!-- Compact Bottom Navigation Bar (Single line, strictly fixed coordinates) -->
+<div id="bottom-nav" class="glass-panel">
+  <div id="nav-mode-switch" style="display:flex;gap:3px;align-items:center;">
+    <button class="nav-btn active" id="btn-mode-tasks" title="Tasks Board">Tasks</button>
+    <button class="nav-btn" id="btn-mode-notes" title="Notes & Drafts">Notes</button>
+  </div>
+  <div style="width:1.5px;height:16px;background:var(--border);margin:0 4px;flex:none;"></div>
+  <div id="categories-jumper" style="display:flex;gap:4px;align-items:center;"></div>
+  <div id="categories-divider" style="width:1.5px;height:16px;background:var(--border);margin:0 4px;flex:none;"></div>
+  <button class="nav-btn" id="btn-add-cat" title="Create a new Domain / Area">
+    <span>+</span> Area
+  </button>
+  <button class="nav-btn" id="btn-add-note" style="display:none;" title="Create a new Note">
+    <span>+</span> Note
+  </button>
+  <button class="nav-btn" id="btn-archive" title="View Completed Tasks">
+    <span>📦</span> Done (<span id="archive-count">0</span>)
+  </button>
+  <button class="nav-btn" id="btn-download-app" style="display:none;background:#181816;color:#fff;margin-left:4px;" title="Download standalone app to your Desktop">
+    <span>⬇</span> Save to PC
+  </button>
+</div>
+
+<!-- Bottom Right Canvas Zoom Control -->
+<div id="zoom-controls" class="glass-panel">
+  <button class="nav-btn" id="btn-zoom-out" style="padding:3px 7px;">−</button>
+  <div class="zoom-indicator" id="zoom-text">100%</div>
+  <button class="nav-btn" id="btn-zoom-in" style="padding:3px 7px;">+</button>
+</div>
+
+<!-- Completed / Archive Drawer -->
+<div id="archive-drawer" class="glass-panel">
+  <div class="drawer-header">
+    <span>Completed Tasks</span>
+    <span style="cursor:pointer;" id="archive-close-btn">✕</span>
+  </div>
+  <div class="archive-list" id="archive-list"></div>
+</div>
+
+<!-- Modal: New Category -->
+<div class="modal-backdrop" id="modal-cat">
+  <div class="modal">
+    <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;text-transform:uppercase;">New Domain / Area</h3>
+    <input id="modal-cat-name" placeholder="Name (e.g. Science, Health, Work...)"
+           style="width:100%;padding:10px 12px;border-radius:8px;border:1.5px solid var(--border);outline:none;font-size:14px;margin-bottom:16px;">
+    <div style="display:flex;justify-content:flex-end;gap:8px;">
+      <button class="nav-btn" id="modal-cat-cancel">Cancel</button>
+      <button class="nav-btn active" id="modal-cat-save">Create Area</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   WHITEBOARD ARCHITECTURE & ENGINE
+   ============================================================ */
+
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+let state = {
+  categories: {},
+  tasks: [],
+  notes: []
+};
+let currentMode = "tasks"; // "tasks" | "notes"
+let viewTasks = JSON.parse(localStorage.getItem("tasks-board-standalone-view") || "null") || { x: window.innerWidth / 2, y: window.innerHeight / 2, z: 0.85 };
+let viewNotes = JSON.parse(localStorage.getItem("notes-board-standalone-view") || "null") || { x: window.innerWidth / 2, y: window.innerHeight / 2, z: 0.85 };
+let view = viewTasks;
+let dragNote = null;
+
+// Canvas View Transform — Strictly stable: NO auto-centering or unintended shifts
+let isPanning = false, panStart = { x: 0, y: 0 };
+let dragCategory = null, dragOffset = { x: 0, y: 0 };
+
+// Drag & Drop State (Task level & Step level)
+let draggedTask = null; // taskId
+let draggedStep = null; // { taskId, stepId }
+
+const canvasContainer = $('#canvas-container');
+const world = $('#world');
+const worldNotes = $('#world-notes');
+
+const screenToWorld = (sx, sy) => ({
+  x: (sx - view.x) / view.z,
+  y: (sy - view.y) / view.z
+});
+
+function applyTransform() {
+  world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.z})`;
+  if (worldNotes) worldNotes.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.z})`;
+  const gridScale = 26 * view.z;
+  canvasContainer.style.backgroundSize = `${gridScale}px ${gridScale}px`;
+  canvasContainer.style.backgroundPosition = `${view.x}px ${view.y}px`;
+  $('#zoom-text').textContent = Math.round(view.z * 100) + '%';
+  if (currentMode === 'tasks') {
+    localStorage.setItem('tasks-board-standalone-view', JSON.stringify(view));
+  } else {
+    localStorage.setItem('notes-board-standalone-view', JSON.stringify(view));
+  }
+}
+
+function zoom(factor, centerX = window.innerWidth / 2, centerY = window.innerHeight / 2) {
+  const newZ = Math.min(2.5, Math.max(0.2, view.z * factor));
+  view.x = centerX - (centerX - view.x) * (newZ / view.z);
+  view.y = centerY - (centerY - view.y) * (newZ / view.z);
+  view.z = newZ;
+  applyTransform();
+}
+
+function jumpTo(wx, wy) {
+  view.x = window.innerWidth / 2 - wx * view.z;
+  view.y = window.innerHeight / 2 - (wy + 180) * view.z;
+  applyTransform();
+}
+
+/* ============================================================
+   DATA PERSISTENCE & LOAD
+   ============================================================ */
+
+const STORAGE_KEY = "tasks-board-standalone-v1";
+
+function openIDB() {
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open("TasksBoardStandaloneDB", 1);
+      req.onupgradeneeded = () => req.result.createObjectStore("store");
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch (e) { resolve(null); }
+  });
+}
+
+async function saveIDB(data) {
+  const db = await openIDB();
+  if (!db) return;
+  try {
+    const tx = db.transaction("store", "readwrite");
+    tx.objectStore("store").put(data, STORAGE_KEY);
+  } catch (e) {}
+}
+
+async function loadIDB() {
+  const db = await openIDB();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction("store", "readonly");
+      const req = tx.objectStore("store").get(STORAGE_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    } catch (e) { resolve(null); }
+  });
+}
+
+async function loadData() {
+  let loaded = null;
+  const local = localStorage.getItem(STORAGE_KEY);
+  if (local) {
+    try { loaded = JSON.parse(local); } catch (e) {}
+  }
+  if (!loaded) {
+    loaded = await loadIDB();
+  }
+  if (loaded && typeof loaded === "object") {
+    state.categories = loaded.categories || {};
+    state.tasks = Array.isArray(loaded.tasks) ? loaded.tasks : [];
+    state.notes = Array.isArray(loaded.notes) ? loaded.notes : [];
+  } else {
+    state = {
+      categories: {
+        life: { id: "life", label: "Life", x: -340, y: -180 },
+        work: { id: "work", label: "Work", x: 220, y: -180 },
+        studies: { id: "studies", label: "Studies", x: -60, y: 160 }
+      },
+      tasks: [
+        {
+          id: "welcome1",
+          title: "Welcome! Click the circle to change state (White = To Do, Yellow = On Hold, Green = Done)",
+          categoryId: "life",
+          state: "todo",
+          note: "You can add notes or links to any task or subtask here",
+          who: "",
+          showNote: true,
+          steps: [
+            {
+              id: "step1",
+              text: "Hover any task or step to add subtasks (+ step / + sub), notes, or drag (⋮⋮)",
+              state: "waiting",
+              note: "",
+              who: "",
+              steps: []
+            }
+          ],
+          created: Date.now(),
+          doneAt: null
+        }
+      ],
+      notes: [
+        {
+          id: "note1",
+          title: "Quick Drafts & Notes",
+          body: "Use this space to write drafts, texts, or ideas.\nEverything is saved automatically as you type!",
+          x: 0,
+          y: -140,
+          created: Date.now()
+        }
+      ]
+    };
+    persist();
+  }
+
+  renderBoard();
+  renderNotes();
+  renderNavigation();
+  renderArchive();
+  applyTransform();
+}
+
+function persist() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (e) {}
+  saveIDB(state);
+}
+
+/* ============================================================
+   RECURSIVE SUBTASK HELPERS
+   ============================================================ */
+
+function findStepInList(list, stepId) {
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].id === stepId) {
+      return { step: list[i], index: i, list: list };
+    }
+    if (list[i].steps && list[i].steps.length) {
+      const res = findStepInList(list[i].steps, stepId);
+      if (res) return res;
+    }
+  }
+  return null;
+}
+
+function renderStepsRecursively(steps, taskId) {
+  if (!steps || !steps.length) return '';
+  return `
+    <div class="subtask-container">
+      ${steps.map(s => {
+        const isDone = s.state === 'done';
+        const isWait = s.state === 'waiting';
+        const circleClass = isDone ? 'done' : isWait ? 'waiting' : '';
+        const showNote = s.showNote || (s.note && s.note.trim().length > 0);
+        const nestedHtml = renderStepsRecursively(s.steps || [], taskId);
+
+        return `
+          <div class="subtask-item ${isDone ? 'done' : ''}" data-step-id="${s.id}" data-task-id="${taskId}">
+            <div class="subtask-row">
+              <span class="drag-grip" draggable="true" data-step-id="${s.id}" data-task-id="${taskId}" title="Drag to reorder step">⋮⋮</span>
+              <div class="subtask-circle ${circleClass}" data-action="cycle-subtask" data-task-id="${taskId}" data-step-id="${s.id}" title="White (To Do) -> Yellow (On Hold) -> Green (Done)"></div>
+              <div class="subtask-text" contenteditable="true" data-field="subtask-text" data-task-id="${taskId}" data-step-id="${s.id}">${s.text}</div>
+              <div class="subtask-tools">
+                <button class="tool-btn ${showNote ? 'has-note' : ''}" data-action="toggle-step-note" data-task-id="${taskId}" data-step-id="${s.id}" title="Add/Toggle Note or Link">note</button>
+                <button class="tool-btn" data-action="add-nested-step" data-task-id="${taskId}" data-step-id="${s.id}" title="Add sub-subtask">+ sub</button>
+                <span class="subtask-del" data-action="del-subtask" data-task-id="${taskId}" data-step-id="${s.id}" title="Delete step">×</span>
+              </div>
+            </div>
+            ${showNote ? `
+              <div class="note-row">
+                <span class="note-prefix">↳</span>
+                <input class="note-input" placeholder="add note, link or details..." value="${s.note || s.who || ''}" data-field="subtask-note" data-task-id="${taskId}" data-step-id="${s.id}">
+              </div>
+            ` : ''}
+            ${nestedHtml}
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+
+/* ============================================================
+   NOTES BOARD ENGINE
+   ============================================================ */
+
+function renderNotes() {
+  if (!worldNotes) return;
+  state.notes = state.notes || [];
+
+  if (!state.notes.length) {
+    worldNotes.innerHTML = `
+      <div style="position:absolute;left:0;top:0;transform:translate(-50%,0);text-align:center;color:var(--fg-faint);font-size:13px;padding:30px;">
+        No notes yet. Click <b>+ Note</b> below to create one.
+      </div>
+    `;
+    return;
+  }
+
+  let html = "";
+  state.notes.forEach(note => {
+    html += `
+      <div class="note-card" id="note-card-${note.id}" style="left:${note.x}px; top:${note.y}px;" data-note-id="${note.id}">
+        <div class="note-card-header">
+          <span class="note-card-title" contenteditable="true" data-field="note-title" data-note-id="${note.id}" title="Click to rename note">${note.title || "Untitled Note"}</span>
+          <button class="note-card-del-btn" data-action="del-note" data-note-id="${note.id}" title="Delete Note">×</button>
+        </div>
+        <div class="note-card-body">
+          <textarea class="note-textarea" placeholder="Start typing your text, draft, article or thoughts here..." data-note-id="${note.id}">${note.body || ""}</textarea>
+        </div>
+      </div>
+    `;
+  });
+  worldNotes.innerHTML = html;
+}
+
+function switchMode(mode) {
+  currentMode = mode;
+  if (mode === "tasks") {
+    document.body.classList.remove("view-notes");
+    $('#btn-mode-tasks').classList.add("active");
+    $('#btn-mode-notes').classList.remove("active");
+    $('#categories-jumper').style.display = "flex";
+    $('#categories-divider').style.display = "block";
+    $('#btn-add-cat').style.display = "flex";
+    $('#btn-add-note').style.display = "none";
+    $('#btn-archive').style.display = "flex";
+    view = viewTasks;
+  } else {
+    document.body.classList.add("view-notes");
+    $('#btn-mode-tasks').classList.remove("active");
+    $('#btn-mode-notes').classList.add("active");
+    $('#categories-jumper').style.display = "none";
+    $('#categories-divider').style.display = "none";
+    $('#btn-add-cat').style.display = "none";
+    $('#btn-add-note').style.display = "flex";
+    $('#btn-archive').style.display = "none";
+    view = viewNotes;
+  }
+  applyTransform();
+}
+
+/* ============================================================
+   RENDER ENGINE
+   ============================================================ */
+
+function renderNavigation() {
+  const container = $('#categories-jumper');
+  container.innerHTML = Object.values(state.categories).map(c => `
+    <button class="nav-btn" data-cat-jump="${c.id}">
+      <span>•</span> ${c.label}
+    </button>
+  `).join('');
+}
+
+function renderArchive() {
+  const doneTasks = state.tasks.filter(t => t.doneAt).sort((a,b) => b.doneAt - a.doneAt);
+  $('#archive-count').textContent = doneTasks.length;
+  const list = $('#archive-list');
+  if (!doneTasks.length) {
+    list.innerHTML = `<div style="padding:16px;color:var(--fg-faint);font-size:12px;text-align:center;">No completed tasks yet</div>`;
+    return;
+  }
+  list.innerHTML = doneTasks.map(t => `
+    <div class="archive-item">
+      <div>
+        <div class="title">${t.title}</div>
+        <div style="font-size:11px;color:var(--fg-muted);">${state.categories[t.categoryId]?.label || ''}</div>
+      </div>
+      <button class="nav-btn" data-restore-task="${t.id}" style="padding:3px 8px;font-size:11px;">Restore</button>
+    </div>
+  `).join('');
+}
+
+function renderBoard() {
+  let html = '';
+
+  Object.values(state.categories).forEach(c => {
+    const tasks = state.tasks.filter(t => t.categoryId === c.id && !t.doneAt);
+
+    let tasksHtml = '';
+    tasks.forEach(t => {
+      const steps = t.steps || [];
+      const isDone = t.state === 'done';
+      const isWait = t.state === 'waiting';
+      const circleClass = isDone ? 'done' : isWait ? 'waiting' : '';
+      const showNote = t.showNote || (t.note && t.note.trim().length > 0) || (t.who && t.who.trim().length > 0);
+
+      // Task-level Note / Link Row
+      let taskNoteHtml = '';
+      if (showNote) {
+        taskNoteHtml = `
+          <div class="note-row">
+            <span class="note-prefix">↳</span>
+            <input class="note-input" placeholder="add note, link or details..." value="${t.note || t.who || ''}" data-field="task-note" data-task-id="${t.id}">
+          </div>
+        `;
+      }
+
+      // Render Subtasks recursively
+      const subtasksHtml = renderStepsRecursively(steps, t.id);
+
+      tasksHtml += `
+        <div class="task-block state-${t.state}" id="task-${t.id}" data-task-id="${t.id}" data-cat-id="${c.id}">
+          <div class="task-main-row">
+            <span class="task-drag-grip" draggable="true" data-task-id="${t.id}" data-cat-id="${c.id}" title="Drag to reorder task">⋮⋮</span>
+            <div class="state-circle ${circleClass}" data-action="cycle-task" data-task-id="${t.id}" title="White (To Do) -> Yellow (On Hold) -> Green (Done)"></div>
+            <div class="task-name" contenteditable="true" data-field="task-title" data-task-id="${t.id}">${t.title}</div>
+            <div class="task-tools">
+              <button class="tool-btn ${showNote ? 'has-note' : ''}" data-action="toggle-task-note" data-task-id="${t.id}" title="Add/Toggle Note or Link">note</button>
+              <button class="tool-btn" data-action="add-subtask" data-task-id="${t.id}" title="Add Subtask">+ step</button>
+              <button class="tool-btn del" data-action="del-task" data-task-id="${t.id}" title="Delete Task">×</button>
+            </div>
+          </div>
+          ${taskNoteHtml}
+          ${subtasksHtml}
+        </div>
+      `;
+    });
+
+    html += `
+      <div class="category-board" id="cat-board-${c.id}" style="left:${c.x}px; top:${c.y}px;" data-cat-id="${c.id}">
+        <div class="category-header">
+          <div class="header-left">
+            <span class="category-title" contenteditable="true" data-field="cat-title" data-cat-id="${c.id}" title="Click to rename domain">${c.label}</span>
+            <span class="category-count">${tasks.length}</span>
+          </div>
+          <button class="category-del-btn" data-action="del-category" data-cat-id="${c.id}" title="Delete Domain">×</button>
+        </div>
+        <div class="task-list" data-cat-id="${c.id}">
+          ${tasksHtml || `<div style="padding:16px 8px;font-size:12px;color:var(--fg-faint);text-align:center;">No tasks yet</div>`}
+        </div>
+        <div class="category-footer">
+          <input class="inline-add-input" placeholder="+ Add a task here (Enter)..." data-cat-id="${c.id}">
+        </div>
+      </div>
+    `;
+  });
+
+  world.innerHTML = html;
+}
+
+/* ============================================================
+   EVENTS: INLINE EDITING, NOTES & STATE ROTATION
+   ============================================================ */
+
+world.addEventListener('input', e => {
+  const field = e.target.dataset.field;
+  if (!field) return;
+
+  const val = e.target.value;
+  const taskId = e.target.dataset.taskId;
+  const stepId = e.target.dataset.stepId;
+
+  if (field === 'task-note') {
+    const t = state.tasks.find(x => x.id === taskId);
+    if (t) { t.note = val; t.who = val; persist(); }
+  } else if (field === 'subtask-note') {
+    const t = state.tasks.find(x => x.id === taskId);
+    if (t) {
+      const found = findStepInList(t.steps || [], stepId);
+      if (found) { found.step.note = val; found.step.who = val; persist(); }
+    }
+  }
+});
+
+world.addEventListener('focusout', e => {
+  const field = e.target.dataset.field;
+  if (!field) return;
+
+  const val = e.target.textContent.trim();
+  const taskId = e.target.dataset.taskId;
+  const stepId = e.target.dataset.stepId;
+  const catId = e.target.dataset.catId;
+
+  if (field === 'task-title') {
+    const t = state.tasks.find(x => x.id === taskId);
+    if (t && val) { t.title = val; persist(); }
+  } else if (field === 'subtask-text') {
+    const t = state.tasks.find(x => x.id === taskId);
+    if (t) {
+      const found = findStepInList(t.steps || [], stepId);
+      if (found && val) { found.step.text = val; persist(); }
+    }
+  } else if (field === 'cat-title') {
+    const c = state.categories[catId];
+    if (c && val) {
+      c.label = val;
+      renderNavigation();
+      persist();
+    }
+  }
+});
+
+world.addEventListener('keydown', e => {
+  if (e.target.isContentEditable && e.key === 'Enter') {
+    e.preventDefault();
+    e.target.blur();
+  }
+
+  if (e.target.classList.contains('inline-add-input') && e.key === 'Enter') {
+    const text = e.target.value.trim();
+    const catId = e.target.dataset.catId;
+    if (text) {
+      state.tasks.push({
+        id: uid(),
+        title: text,
+        categoryId: catId,
+        state: "todo",
+        note: "",
+        who: "",
+        steps: [],
+        created: Date.now(),
+        doneAt: null
+      });
+      persist();
+      renderBoard();
+      const nextInput = $(`#cat-board-${catId} .inline-add-input`);
+      if (nextInput) nextInput.focus();
+    }
+  }
+
+  if (e.target.classList.contains('note-input') && e.key === 'Enter') {
+    e.target.blur();
+  }
+});
+
+// Click Delegations
+world.addEventListener('click', e => {
+  const act = e.target.dataset.action;
+  const taskId = e.target.dataset.taskId;
+  const stepId = e.target.dataset.stepId;
+  const catId = e.target.dataset.catId;
+
+  // Delete Area / Domain
+  if (act === 'del-category') {
+    const c = state.categories[catId];
+    if (c) {
+      const count = state.tasks.filter(t => t.categoryId === catId && !t.doneAt).length;
+      const msg = count > 0 
+        ? `Delete domain "${c.label}" and its ${count} active task(s)?` 
+        : `Delete domain "${c.label}"?`;
+      if (confirm(msg)) {
+        delete state.categories[catId];
+        state.tasks = state.tasks.filter(t => t.categoryId !== catId);
+        persist();
+        renderBoard();
+        renderNavigation();
+      }
+    }
+    return;
+  }
+
+  // 3-State Cycle for Main Task
+  if (act === 'cycle-task') {
+    const t = state.tasks.find(x => x.id === taskId);
+    if (!t) return;
+    if (t.state === 'todo') {
+      t.state = 'waiting';
+      t.doneAt = null;
+    } else if (t.state === 'waiting') {
+      t.state = 'done';
+      t.doneAt = Date.now();
+    } else {
+      t.state = 'todo';
+      t.doneAt = null;
+    }
+    persist();
+    renderBoard();
+    renderArchive();
+  }
+
+  // Toggle Universal Note for Task
+  else if (act === 'toggle-task-note') {
+    const t = state.tasks.find(x => x.id === taskId);
+    if (!t) return;
+    t.showNote = !t.showNote;
+    persist();
+    renderBoard();
+    if (t.showNote) {
+      setTimeout(() => {
+        const inp = $(`[data-field="task-note"][data-task-id="${t.id}"]`);
+        if (inp) inp.focus();
+      }, 40);
+    }
+  }
+
+  // 3-State Cycle for Subtask
+  else if (act === 'cycle-subtask') {
+    const t = state.tasks.find(x => x.id === taskId);
+    if (!t) return;
+    const found = findStepInList(t.steps || [], stepId);
+    if (found) {
+      if (found.step.state === 'todo') {
+        found.step.state = 'waiting';
+      } else if (found.step.state === 'waiting') {
+        found.step.state = 'done';
+      } else {
+        found.step.state = 'todo';
+      }
+      persist();
+      renderBoard();
+    }
+  }
+
+  // Toggle Universal Note for Subtask
+  else if (act === 'toggle-step-note') {
+    const t = state.tasks.find(x => x.id === taskId);
+    if (!t) return;
+    const found = findStepInList(t.steps || [], stepId);
+    if (found) {
+      found.step.showNote = !found.step.showNote;
+      persist();
+      renderBoard();
+      if (found.step.showNote) {
+        setTimeout(() => {
+          const inp = $(`[data-field="subtask-note"][data-task-id="${t.id}"][data-step-id="${stepId}"]`);
+          if (inp) inp.focus();
+        }, 40);
+      }
+    }
+  }
+
+  // Add Top-Level Subtask
+  else if (act === 'add-subtask') {
+    const t = state.tasks.find(x => x.id === taskId);
+    if (t) {
+      t.steps = t.steps || [];
+      const newStep = { id: uid(), text: "New step", state: "todo", note: "", who: "", steps: [] };
+      t.steps.push(newStep);
+      persist();
+      renderBoard();
+
+      setTimeout(() => {
+        const el = $(`[data-field="subtask-text"][data-step-id="${newStep.id}"]`);
+        if (el) { el.focus(); document.execCommand('selectAll', false, null); }
+      }, 40);
+    }
+  }
+
+  // Add Nested Sub-subtask
+  else if (act === 'add-nested-step') {
+    const t = state.tasks.find(x => x.id === taskId);
+    if (t) {
+      const found = findStepInList(t.steps || [], stepId);
+      if (found) {
+        found.step.steps = found.step.steps || [];
+        const newNested = { id: uid(), text: "Nested step", state: "todo", note: "", who: "", steps: [] };
+        found.step.steps.push(newNested);
+        persist();
+        renderBoard();
+
+        setTimeout(() => {
+          const el = $(`[data-field="subtask-text"][data-step-id="${newNested.id}"]`);
+          if (el) { el.focus(); document.execCommand('selectAll', false, null); }
+        }, 40);
+      }
+    }
+  }
+
+  // Delete Subtask
+  else if (act === 'del-subtask') {
+    const t = state.tasks.find(x => x.id === taskId);
+    if (t) {
+      const found = findStepInList(t.steps || [], stepId);
+      if (found) {
+        found.list.splice(found.index, 1);
+        persist();
+        renderBoard();
+      }
+    }
+  }
+
+  // Delete Task
+  else if (act === 'del-task') {
+    state.tasks = state.tasks.filter(x => x.id !== taskId);
+    persist();
+    renderBoard();
+  }
+});
+
+/* ============================================================
+   DRAG & DROP: 1. TASKS REORDERING & 2. SUBTASKS REORDERING
+   ============================================================ */
+
+world.addEventListener('dragstart', e => {
+  const taskGrip = e.target.closest('.task-drag-grip');
+  if (taskGrip) {
+    draggedTask = taskGrip.dataset.taskId;
+    const taskBlock = taskGrip.closest('.task-block');
+    taskBlock.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', draggedTask);
+    return;
+  }
+
+  const stepGrip = e.target.closest('.drag-grip');
+  if (stepGrip) {
+    const stepItem = stepGrip.closest('.subtask-item');
+    draggedStep = {
+      taskId: stepGrip.dataset.taskId,
+      stepId: stepGrip.dataset.stepId
+    };
+    stepItem.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', stepGrip.dataset.stepId);
+  }
+});
+
+world.addEventListener('dragover', e => {
+  if (draggedTask) {
+    const targetBlock = e.target.closest('.task-block');
+    const targetList = e.target.closest('.task-list');
+    if (targetBlock || targetList) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      $$('.task-block').forEach(el => el.classList.remove('drag-over'));
+      if (targetBlock && targetBlock.dataset.taskId !== draggedTask) {
+        targetBlock.classList.add('drag-over');
+      }
+    }
+    return;
+  }
+
+  if (draggedStep) {
+    const targetItem = e.target.closest('.subtask-item');
+    if (!targetItem) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    $$('.subtask-item').forEach(el => el.classList.remove('drag-over'));
+    targetItem.classList.add('drag-over');
+  }
+});
+
+world.addEventListener('drop', e => {
+  if (draggedTask) {
+    e.preventDefault();
+    const targetBlock = e.target.closest('.task-block');
+    const targetList = e.target.closest('.task-list');
+    $$('.task-block').forEach(el => el.classList.remove('drag-over', 'dragging'));
+
+    const sourceIdx = state.tasks.findIndex(t => t.id === draggedTask);
+    if (sourceIdx !== -1) {
+      const [movedTask] = state.tasks.splice(sourceIdx, 1);
+
+      if (targetBlock) {
+        const targetTaskId = targetBlock.dataset.taskId;
+        const targetCatId = targetBlock.dataset.catId;
+        movedTask.categoryId = targetCatId;
+        const targetIdx = state.tasks.findIndex(t => t.id === targetTaskId);
+        if (targetIdx !== -1) {
+          state.tasks.splice(targetIdx, 0, movedTask);
+        } else {
+          state.tasks.push(movedTask);
+        }
+      } else if (targetList) {
+        const targetCatId = targetList.dataset.catId;
+        movedTask.categoryId = targetCatId;
+        state.tasks.push(movedTask);
+      }
+      persist();
+      renderBoard();
+    }
+    draggedTask = null;
+    return;
+  }
+
+  if (draggedStep) {
+    e.preventDefault();
+    const targetItem = e.target.closest('.subtask-item');
+    $$('.subtask-item').forEach(el => el.classList.remove('drag-over', 'dragging'));
+
+    if (!targetItem) return;
+    const targetStepId = targetItem.dataset.stepId;
+    const targetTaskId = targetItem.dataset.taskId;
+
+    if (draggedStep.taskId === targetTaskId && draggedStep.stepId !== targetStepId) {
+      const t = state.tasks.find(x => x.id === targetTaskId);
+      if (t) {
+        const source = findStepInList(t.steps || [], draggedStep.stepId);
+        const target = findStepInList(t.steps || [], targetStepId);
+
+        if (source && target) {
+          const [removed] = source.list.splice(source.index, 1);
+          target.list.splice(target.index, 0, removed);
+          persist();
+          renderBoard();
+        }
+      }
+    }
+    draggedStep = null;
+  }
+});
+
+world.addEventListener('dragend', () => {
+  draggedTask = null;
+  draggedStep = null;
+  $$('.task-block').forEach(el => el.classList.remove('drag-over', 'dragging'));
+  $$('.subtask-item').forEach(el => el.classList.remove('drag-over', 'dragging'));
+});
+
+/* ============================================================
+   EVENTS: NOTES BOARD INTERACTIONS
+   ============================================================ */
+
+worldNotes.addEventListener('input', e => {
+  if (e.target.classList.contains('note-textarea')) {
+    const noteId = e.target.dataset.noteId;
+    const note = (state.notes || []).find(n => n.id === noteId);
+    if (note) {
+      note.body = e.target.value;
+      persist();
+    }
+  }
+});
+
+worldNotes.addEventListener('focusout', e => {
+  if (e.target.dataset.field === 'note-title') {
+    const noteId = e.target.dataset.noteId;
+    const note = (state.notes || []).find(n => n.id === noteId);
+    const val = e.target.textContent.trim();
+    if (note && val) {
+      note.title = val;
+      persist();
+    }
+  }
+});
+
+worldNotes.addEventListener('keydown', e => {
+  if (e.target.isContentEditable && e.key === 'Enter') {
+    e.preventDefault();
+    e.target.blur();
+  }
+});
+
+worldNotes.addEventListener('click', e => {
+  if (e.target.dataset.action === 'del-note') {
+    const noteId = e.target.dataset.noteId;
+    const note = (state.notes || []).find(n => n.id === noteId);
+    const title = note ? (note.title || 'Untitled Note') : 'this note';
+    if (confirm(`Delete note "${title}"?`)) {
+      state.notes = (state.notes || []).filter(n => n.id !== noteId);
+      persist();
+      renderNotes();
+    }
+  }
+});
+
+/* ============================================================
+   CANVAS PANNING & CATEGORY / NOTE BOARD POSITION DRAGGING
+   ============================================================ */
+
+canvasContainer.addEventListener('pointerdown', e => {
+  const header = e.target.closest('.category-header');
+  if (header && !e.target.closest('.category-del-btn') && !e.target.isContentEditable) {
+    const catBoard = header.closest('.category-board');
+    const catId = catBoard.dataset.catId;
+    const cat = state.categories[catId];
+    const w = screenToWorld(e.clientX, e.clientY);
+
+    dragCategory = cat;
+    dragOffset = { x: w.x - cat.x, y: w.y - cat.y };
+    catBoard.classList.add('dragging');
+    return;
+  }
+
+  const noteHeader = e.target.closest('.note-card-header');
+  if (noteHeader && !e.target.closest('.note-card-del-btn') && !e.target.isContentEditable) {
+    const noteCard = noteHeader.closest('.note-card');
+    const noteId = noteCard.dataset.noteId;
+    const note = (state.notes || []).find(n => n.id === noteId);
+    if (note) {
+      const w = screenToWorld(e.clientX, e.clientY);
+      dragNote = note;
+      dragOffset = { x: w.x - note.x, y: w.y - note.y };
+      noteCard.classList.add('dragging');
+      return;
+    }
+  }
+
+  if (e.target.closest('.category-board') || e.target.closest('.note-card') || e.target.closest('.glass-panel') || e.target.closest('.modal-backdrop')) {
+    return;
+  }
+
+  isPanning = true;
+  panStart = { x: e.clientX - view.x, y: e.clientY - view.y };
+  canvasContainer.classList.add('panning');
+});
+
+window.addEventListener('pointermove', e => {
+  if (isPanning) {
+    view.x = e.clientX - panStart.x;
+    view.y = e.clientY - panStart.y;
+    applyTransform();
+    return;
+  }
+
+  if (dragCategory) {
+    const w = screenToWorld(e.clientX, e.clientY);
+    dragCategory.x = Math.round(w.x - dragOffset.x);
+    dragCategory.y = Math.round(w.y - dragOffset.y);
+
+    const el = $(`#cat-board-${dragCategory.id}`);
+    if (el) {
+      el.style.left = dragCategory.x + 'px';
+      el.style.top = dragCategory.y + 'px';
+    }
+  }
+
+  if (dragNote) {
+    const w = screenToWorld(e.clientX, e.clientY);
+    dragNote.x = Math.round(w.x - dragOffset.x);
+    dragNote.y = Math.round(w.y - dragOffset.y);
+
+    const el = $(`#note-card-${dragNote.id}`);
+    if (el) {
+      el.style.left = dragNote.x + 'px';
+      el.style.top = dragNote.y + 'px';
+    }
+  }
+});
+
+window.addEventListener('pointerup', () => {
+  if (isPanning) {
+    isPanning = false;
+    canvasContainer.classList.remove('panning');
+  }
+  if (dragCategory) {
+    $$('.category-board').forEach(el => el.classList.remove('dragging'));
+    dragCategory = null;
+    persist();
+  }
+  if (dragNote) {
+    $$('.note-card').forEach(el => el.classList.remove('dragging'));
+    dragNote = null;
+    persist();
+  }
+});
+
+canvasContainer.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (e.ctrlKey || e.metaKey) {
+    const factor = e.deltaY < 0 ? 1.08 : 0.92;
+    zoom(factor, e.clientX, e.clientY);
+  } else {
+    view.x -= e.deltaX;
+    view.y -= e.deltaY;
+    applyTransform();
+  }
+}, { passive: false });
+
+/* ============================================================
+   BOTTOM BAR & MODAL ACTIONS
+   ============================================================ */
+
+$('#categories-jumper').addEventListener('click', e => {
+  const btn = e.target.closest('[data-cat-jump]');
+  if (!btn) return;
+  const cat = state.categories[btn.dataset.catJump];
+  if (cat) jumpTo(cat.x, cat.y);
+});
+
+$('#btn-zoom-in').addEventListener('click', () => zoom(1.25));
+$('#btn-zoom-out').addEventListener('click', () => zoom(0.8));
+$('#zoom-text').addEventListener('click', () => { view.z = 1; applyTransform(); });
+
+// Mode switch handlers (Tasks <-> Notes)
+$('#btn-mode-tasks').addEventListener('click', () => switchMode('tasks'));
+$('#btn-mode-notes').addEventListener('click', () => switchMode('notes'));
+
+// Add Note handler
+$('#btn-add-note').addEventListener('click', () => {
+  const centerWorld = screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+  state.notes = state.notes || [];
+  const count = state.notes.length;
+  const newNote = {
+    id: uid(),
+    title: 'Untitled Note',
+    body: '',
+    x: Math.round(centerWorld.x + (count % 2 ? 40 : -40)),
+    y: Math.round(centerWorld.y - 120),
+    created: Date.now()
+  };
+  state.notes.push(newNote);
+  persist();
+  renderNotes();
+  jumpTo(newNote.x, newNote.y);
+  setTimeout(() => {
+    const el = $(`#note-card-${newNote.id} .note-textarea`);
+    if (el) el.focus();
+  }, 50);
+});
+
+$('#btn-add-cat').addEventListener('click', () => {
+  $('#modal-cat').classList.add('open');
+  $('#modal-cat-name').focus();
+});
+$('#modal-cat-cancel').addEventListener('click', () => $('#modal-cat').classList.remove('open'));
+$('#modal-cat-save').addEventListener('click', () => {
+  const name = $('#modal-cat-name').value.trim();
+  if (name) {
+    const id = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const count = Object.keys(state.categories).length;
+    // Place new domain near current view center so you can see it right away
+    const centerWorld = screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+    state.categories[id] = {
+      id: id,
+      label: name,
+      x: Math.round(centerWorld.x + (count % 2 ? 60 : -60)),
+      y: Math.round(centerWorld.y - 120)
+    };
+    persist();
+    renderNavigation();
+    renderBoard();
+    jumpTo(state.categories[id].x, state.categories[id].y);
+  }
+  $('#modal-cat-name').value = '';
+  $('#modal-cat').classList.remove('open');
+});
+
+$('#btn-archive').addEventListener('click', () => {
+  $('#archive-drawer').classList.toggle('open');
+});
+$('#archive-close-btn').addEventListener('click', () => {
+  $('#archive-drawer').classList.remove('open');
+});
+
+$('#archive-list').addEventListener('click', e => {
+  if (e.target.dataset.restoreTask) {
+    const t = state.tasks.find(x => x.id === e.target.dataset.restoreTask);
+    if (t) {
+      t.doneAt = null;
+      t.state = 'todo';
+      persist();
+      renderBoard();
+      renderArchive();
+    }
+  }
+});
+
+// Boot
+if (window.location.protocol.startsWith("http")) {
+  const dlBtn = document.getElementById("btn-download-app");
+  if (dlBtn) {
+    dlBtn.style.display = "flex";
+    dlBtn.addEventListener("click", () => {
+      const clone = document.documentElement.cloneNode(true);
+      const b = clone.querySelector("#btn-download-app");
+      if (b) b.remove();
+      const content = "<!doctype html>\n" + clone.outerHTML;
+      const blob = new Blob([content], { type: "text/html;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "Tasks.html";
+      a.click();
+    });
+  }
+}
+loadData();
+</script>
+</body>
+</html>
